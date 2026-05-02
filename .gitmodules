@@ -1,0 +1,21 @@
+[submodule "components/ED_OTA"]
+	path = components/ED_OTA
+	url = https://github.com/edolis/ED_OTA.git
+[submodule "components/ED_WIFI"]
+	path = components/ED_WIFI
+	url = https://github.com/edolis/ED_WIFI.git
+[submodule "components/ED_MQTT"]
+	path = components/ED_MQTT
+	url = https://github.com/edolis/ED_MQTT.git
+[submodule "components/ED_SYS"]
+	path = components/ED_SYS
+	url = https://github.com/edolis/ED_SYS.git
+[submodule "components/ED_S_JSON"]
+	path = components/ED_S_JSON
+	url = https://github.com/edolis/ED_S_JSON.git
+[submodule "components/ED_NVS"]
+	path = components/ED_NVS
+	url = https://github.com/edolis/ED_NVS.git
+[submodule "components/toolbox"]
+	path = components/toolbox
+	url = https://github.com/edolis/ED-esp32-toolbox

@@ -1,0 +1,13 @@
+// main/version.h.in
+#pragma once
+
+#define FW_PROJECT_NAME     "@CMAKE_PROJECT_NAME@"
+#define FW_PROJECT_VER      "@VERSION_STRING@"
+
+#define FW_GIT_VERSION      "@VERSION_STRING@"
+#define FW_GIT_TAG          "@GIT_TAG@"
+#define FW_GIT_HASH         "@GIT_SHORT_HASH@"
+#define FW_FULL_HASH        "@GIT_FULL_HASH@"
+#define FW_BUILD_ID         "@BUILD_ID@"
+
+#cmakedefine ENABLE_OTA 1
