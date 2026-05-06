@@ -49,30 +49,44 @@ def read_version_h():
 
 def update_main_cpp(filepath, values):
     with open(filepath, 'r', encoding='utf-8') as f:
-        content = f.read()
+        lines = f.readlines()
 
-    original = content
-    for field, new_value in values.items():
-        # Robust pattern: matches any whitespace between tokens, allows optional 'constexpr'
-        pattern = rf'(static\s+constexpr\s+const\s+char\s*\*\s+{field}\s*=\s*")[^"]*(";)'
-        replacement = rf'\g<1>{new_value}\g<2>'
-        content = re.sub(pattern, replacement, content)
+    modified = False
+    new_lines = []
+    for line in lines:
+        original_line = line
+        for field, new_value in values.items():
+            # Only process lines that contain the field name and 'static constexpr'
+            if field in line and 'static constexpr' in line and '=' in line:
+                # Split at the first '='
+                before_eq, after_eq = line.split('=', 1)
+                # Find the first and last double quote in the right part
+                first_quote = after_eq.find('"')
+                last_quote = after_eq.rfind('"')
+                if first_quote != -1 and last_quote != -1 and first_quote < last_quote:
+                    # Replace the string between quotes
+                    new_after_eq = after_eq[:first_quote+1] + new_value + after_eq[last_quote:]
+                    line = before_eq + '=' + new_after_eq
+                    modified = True
+        new_lines.append(line)
 
-    if content == original:
-        print("WARNING: No placeholders replaced. Check the struct formatting.")
-        # Show first few lines around the struct for debugging
-        lines = original.splitlines()
-        for i, line in enumerate(lines):
-            if "GIT_fwInfo" in line:
-                for j in range(i, min(i+10, len(lines))):
-                    print("  " + lines[j])
-                break
-    else:
+    if modified:
         with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(content)
+            f.writelines(new_lines)
         print("INFO: Updated placeholders in", filepath)
         for field, val in values.items():
             print(f"  {field} = {val}")
+    else:
+        print("WARNING: No placeholders replaced. Check the struct formatting.")
+        # Print the struct lines for debugging
+        in_struct = False
+        for line in lines:
+            if "GIT_fwInfo" in line:
+                in_struct = True
+            if in_struct:
+                print("  " + line.rstrip())
+                if "};" in line:
+                    break
 
 def main():
     main_cpp = find_main_cpp()
