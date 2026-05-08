@@ -5,24 +5,47 @@ import sys
 import subprocess
 from datetime import datetime
 
+def get_git_author():
+    """Retrieve Git user name and email, or fallback."""
+    try:
+        name = subprocess.check_output(['git', 'config', 'user.name'], stderr=subprocess.DEVNULL).decode().strip()
+        email = subprocess.check_output(['git', 'config', 'user.email'], stderr=subprocess.DEVNULL).decode().strip()
+        if name and email:
+            return f"{name} ({email})"
+        elif name:
+            return name
+    except:
+        pass
+    # Fallback to environment or default
+    name = os.environ.get('GIT_AUTHOR_NAME', 'Unknown')
+    email = os.environ.get('GIT_AUTHOR_EMAIL', '')
+    if email:
+        return f"{name} ({email})"
+    return name
+
 def find_main_cpp():
-    """Find the source file that contains 'app_main' (ESP‑IDF entry point)."""
-    candidate_extensions = ['.cpp', '.c']
+    """Find source file containing 'app_main' (ESP‑IDF entry point)."""
+    common = ["main/main.cpp", "main/main.c", "src/main.cpp", "src/main.c", "main.cpp", "main.c"]
+    for path in common:
+        if os.path.isfile(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                if 'app_main' in f.read():
+                    return path
     for root, _, files in os.walk("."):
+        if root.startswith((".\\components", "components")):
+            continue
         for file in files:
-            if any(file.endswith(ext) for ext in candidate_extensions):
-                full_path = os.path.join(root, file)
+            if file.endswith(('.cpp', '.c')):
+                full = os.path.join(root, file)
                 try:
-                    with open(full_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        if 'app_main' in content:
-                            return full_path
+                    with open(full, 'r', encoding='utf-8') as f:
+                        if 'app_main' in f.read():
+                            return full
                 except:
                     continue
     return None
 
 def read_version_h():
-    """Read all FW_* macro values from the generated version.h."""
     version_h = os.path.join("build", "main", "version.h")
     if not os.path.isfile(version_h):
         for root, _, files in os.walk("build"):
@@ -32,14 +55,12 @@ def read_version_h():
     if not os.path.isfile(version_h):
         print("ERROR: version.h not found. Run 'idf.py reconfigure' first.")
         sys.exit(1)
-
     macros = {}
     with open(version_h, 'r', encoding='utf-8') as f:
         for line in f:
             m = re.match(r'^#define\s+FW_(\w+)\s+"(.*)"', line)
             if m:
                 macros[m.group(1)] = m.group(2)
-
     return {
         "GIT_VERSION": macros.get("GIT_VERSION", "v0.0.0-0"),
         "GIT_TAG":     macros.get("GIT_TAG", "untagged"),
@@ -49,7 +70,6 @@ def read_version_h():
     }
 
 def get_required_components():
-    """Parse main/CMakeLists.txt to extract REQUIRES list."""
     cmake_file = "main/CMakeLists.txt"
     if not os.path.isfile(cmake_file):
         return []
@@ -61,22 +81,19 @@ def get_required_components():
     req_line = matches[0]
     req_line = re.sub(r'\\\s*\n', ' ', req_line)
     components = req_line.split()
-    components = [c.strip() for c in components if c.strip()]
-    return components
+    return [c.strip() for c in components if c.strip()]
 
-def get_submodule_version(submodule_path):
-    """Return git describe for a submodule (relative path)."""
+def get_submodule_version(path):
     try:
-        output = subprocess.check_output(
-            ['git', '-C', submodule_path, 'describe', '--tags', '--long', '--dirty', '--always'],
+        out = subprocess.check_output(
+            ['git', '-C', path, 'describe', '--tags', '--long', '--dirty', '--always'],
             stderr=subprocess.DEVNULL
         ).decode().strip()
-        return output
+        return out
     except:
         return "unknown"
 
-def get_submodule_versions(required_components):
-    """Return dict {component_name: version} for components that are submodules."""
+def get_submodule_versions(required):
     if not os.path.isfile('.gitmodules'):
         return {}
     submodule_paths = {}
@@ -88,105 +105,80 @@ def get_submodule_versions(required_components):
                 name = os.path.basename(path)
                 submodule_paths[name] = path
     versions = {}
-    for comp in required_components:
+    for comp in required:
         if comp in submodule_paths:
-            path = submodule_paths[comp]
-            if os.path.isdir(path):
-                versions[comp] = get_submodule_version(path)
+            p = submodule_paths[comp]
+            if os.path.isdir(p):
+                versions[comp] = get_submodule_version(p)
     return versions
 
-def ensure_comment_block(content):
-    """If no /** ... */ comment block exists, create a default one and insert at top."""
-    if re.search(r'/\*\*.*?\*/', content, re.DOTALL):
-        return content
-    default_block = """/**
- * @file
- * @brief
- *
- * @author
- * @version
- * @date
- * @submodules-start
- * @submodules-end
- */"""
-    return default_block + '\n\n' + content
+def extract_file_and_brief(content):
+    """Extract @file and @brief lines from existing comment block (if any)."""
+    file_line = ""
+    brief_line = ""
+    comment_match = re.search(r'/\*\*.*?\*/', content, re.DOTALL)
+    if comment_match:
+        comment = comment_match.group(0)
+        lines = comment.splitlines()
+        for line in lines:
+            if '@file' in line:
+                file_line = line.strip()
+            elif '@brief' in line:
+                brief_line = line.strip()
+                break  # assume brief is after file and before other tags
+    return file_line, brief_line
 
-def update_comment_block(content, version_str):
-    """Update @version and @date in the top comment block."""
+def rebuild_comment_block(values, submodule_versions, existing_file, existing_brief):
+    """Build a clean comment block with fixed order."""
     today = datetime.now().strftime("%Y-%m-%d")
-    lines = content.splitlines()
-    new_lines = []
-    in_comment = False
-    for line in lines:
-        if line.strip().startswith('/**'):
-            in_comment = True
-        if in_comment:
-            if '@version' in line:
-                indent = line[:line.find('@version')]
-                if 'GIT_VERSION:' in line:
-                    new_line = indent + '@version GIT_VERSION: ' + version_str
-                else:
-                    new_line = indent + '@version ' + version_str
-                line = new_line
-            elif '@date' in line:
-                indent = line[:line.find('@date')]
-                line = indent + '@date ' + today
-        new_lines.append(line)
-        if in_comment and line.strip().endswith('*/'):
-            in_comment = False
-    return '\n'.join(new_lines)
+    version_str = values["GIT_VERSION"]
+    author = get_git_author()
 
-def update_submodule_comment(content, submodule_versions):
-    """Replace content between @submodules-start and @submodules-end markers."""
-    start_marker = "@submodules-start"
-    end_marker = "@submodules-end"
-    lines = content.splitlines()
-    start_line_idx = -1
-    for i, line in enumerate(lines):
-        if start_marker in line:
-            start_line_idx = i
-            break
-    if start_line_idx == -1:
-        return content
-    end_line_idx = -1
-    for i in range(start_line_idx + 1, len(lines)):
-        if end_marker in lines[i]:
-            end_line_idx = i
-            break
-    if end_line_idx == -1:
-        return content
-    indent = re.match(r'^(\s*)', lines[start_line_idx]).group(1)
-    new_block = []
-    new_block.append(lines[start_line_idx])
+    # Use existing @file and @brief if present, else defaults
+    if not existing_file:
+        existing_file = " * @file "
+    if not existing_brief:
+        existing_brief = " * @brief "
+
+    # Construct block
+    lines = []
+    lines.append("/**")
+    lines.append(existing_file)
+    lines.append(existing_brief)
+    lines.append(" *")
+    lines.append(f" * @author {author}")
+    lines.append(f" * @version GIT_VERSION: {version_str}")
+    lines.append(f" * @date {today}")
+    lines.append(" * @submodules-start")
     if submodule_versions:
         max_len = max(len(name) for name in submodule_versions.keys())
         for name, ver in sorted(submodule_versions.items()):
-            new_block.append(f"{indent} *   {name:<{max_len}} : {ver}")
+            lines.append(f" *   {name:<{max_len}} : {ver}")
     else:
-        new_block.append(f"{indent} *   (none)")
-    new_block.append(lines[end_line_idx])
-    new_lines = lines[:start_line_idx] + new_block + lines[end_line_idx+1:]
-    return '\n'.join(new_lines)
+        lines.append(" *   (none)")
+    lines.append(" * @submodules-end")
+    lines.append(" */")
+    return '\n'.join(lines)
 
 def update_main_file(filepath, values, submodule_versions):
     with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    # Ensure comment block exists
-    content = ensure_comment_block(content)
+    # Extract existing @file and @brief
+    file_line, brief_line = extract_file_and_brief(content)
 
-    # Update version and date
-    content = update_comment_block(content, values["GIT_VERSION"])
+    # Build a completely new comment block
+    new_comment = rebuild_comment_block(values, submodule_versions, file_line, brief_line)
 
-    # Update submodule list
-    content = update_submodule_comment(content, submodule_versions)
+    # Replace the old comment block (the first /** ... */) with the new one
+    content = re.sub(r'/\*\*.*?\*/', new_comment, content, flags=re.DOTALL, count=1)
 
-    # Update GIT_fwInfo struct (if present)
+    # Update GIT_fwInfo struct
     for field, new_value in values.items():
         pattern = rf'^(\s*static\s+constexpr\s+const\s+char\s*\*\s+{field}\s*=\s*")[^"]*(";?)'
+        replacement = rf'\g<1>{new_value}\g<2>'
         content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
 
-    # Write back only if changed
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
     print("INFO: Updated", filepath)
@@ -194,7 +186,7 @@ def update_main_file(filepath, values, submodule_versions):
 def main():
     main_file = find_main_cpp()
     if not main_file:
-        print("ERROR: Could not find a source file containing 'app_main'.")
+        print("ERROR: Could not find source file containing 'app_main'.")
         sys.exit(1)
     print("Found main source file:", main_file)
 
