@@ -52,6 +52,13 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(${PROJECT_NAME})
 
 # ----------------------------------------------------------------------
+# Force CMake to reconfigure when Git HEAD or tags change
+# ----------------------------------------------------------------------
+set_property(DIRECTORY . APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/.git/HEAD;${CMAKE_SOURCE_DIR}/.git/refs/tags"
+)
+
+# ----------------------------------------------------------------------
 # Extra version info passed directly to the compiler (no generated header needed)
 # ----------------------------------------------------------------------
 execute_process(
