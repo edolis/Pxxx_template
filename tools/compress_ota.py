@@ -2,8 +2,7 @@
 import os
 import re
 import sys
-import subprocess
-import shutil
+import lz4.block   # requires lz4 library installed
 
 def get_version_from_header(version_h_path):
     """Read FW_GIT_VERSION from version.h."""
@@ -25,40 +24,66 @@ def main():
     fw_bin = sys.argv[2]
     shared_folder = sys.argv[3]
 
-    # Find version.h
+    # --- version handling (same as before) ---
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
     version_h = os.path.join(project_root, "build", "main", "version.h")
-
     version = get_version_from_header(version_h)
     if not version:
-        print("WARNING: Could not read version from version.h, using default")
+        print("WARNING: Could not read version from version.h, using default v0.0.0-0")
         version = "v0.0.0-0"
 
-    # Sanitize version for filename
     safe_version = re.sub(r'[/\\]', '_', version)
     compressed_fw = f"{project_name}_{safe_version}.bin.lz4"
 
-    # Find lz4
-    lz4_path = shutil.which("lz4")
-    if not lz4_path:
-        print("ERROR: lz4 not found in PATH")
-        sys.exit(1)
+    # --- compression parameters (must match ESP expectations) ---
+    CHUNK_SIZE = 4096            # 4 KB
+    DICT_SIZE = 16 * 1024        # 16 KB rolling dictionary
 
-    # Compress
-    cmd = [lz4_path, "-9", "--no-frame-crc", "-f", fw_bin, compressed_fw]
-    print(f"Compressing: {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
-
-    # Copy to shared folder using shutil.copy2 (works on Windows and Unix)
     dest_path = os.path.join(shared_folder, compressed_fw)
-    print(f"Copying {compressed_fw} to {dest_path}")
+    print(f"Compressing {fw_bin} -> {dest_path} (raw LZ4 with dictionary)")
+
+    total_chunks = 0
+    total_original = 0
+    total_compressed = 0
+    history = b""                # rolling dictionary buffer
+
     try:
-        shutil.copy2(compressed_fw, dest_path)
-        print("Copy successful.")
+        with open(fw_bin, "rb") as f_in, open(dest_path, "wb") as f_out:
+            while True:
+                chunk = f_in.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+
+                # Compress using dictionary (store_size=False -> no internal size header)
+                compressed_chunk = lz4.block.compress(
+                    chunk,
+                    mode='high_compression',
+                    store_size=False,
+                    compression=9,
+                    dict=history
+                )
+
+                total_chunks += 1
+                total_original += len(chunk)
+                total_compressed += len(compressed_chunk)
+
+                # Write 4‑byte little‑endian size header, then data
+                f_out.write(len(compressed_chunk).to_bytes(4, byteorder='little'))
+                f_out.write(compressed_chunk)
+
+                # Update rolling dictionary (keep last DICT_SIZE bytes of input)
+                history = (history + chunk)[-DICT_SIZE:]
+
+        print(f"✅ Compressed successfully: {dest_path}")
+        print(f"   Chunks: {total_chunks}, Original: {total_original} B, Compressed: {total_compressed} B "
+              f"({total_compressed/total_original:.2%})")
+
     except Exception as e:
-        print(f"ERROR copying file: {e}")
+        print(f"❌ Compression failed: {e}")
         sys.exit(1)
+
+    print("Done.")
 
 if __name__ == "__main__":
     main()

@@ -1,6 +1,22 @@
 cmake_minimum_required(VERSION 3.16)
 
 # ----------------------------------------------------------------------
+# Detect project version from Git (runs at CMake configure time)
+# ----------------------------------------------------------------------
+execute_process(
+    COMMAND git describe --tags --long --dirty --always
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_DESCRIBE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT GIT_DESCRIBE)
+    set(GIT_DESCRIBE "v0.0.0-0-g0000000-dirty")
+endif()
+set(PROJECT_VER ${GIT_DESCRIBE})
+message(STATUS "Firmware version: ${PROJECT_VER}")
+
+# ----------------------------------------------------------------------
 # Project configuration
 # ----------------------------------------------------------------------
 set(SHARED_FOLDER "//raspi00/fware" CACHE STRING "Network share for OTA firmware")
@@ -31,23 +47,50 @@ else()
     message(FATAL_ERROR "ESP_HEADERS environment variable is not set!")
 endif()
 
+# Include ESP-IDF project tools
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(${PROJECT_NAME})
 
 # ----------------------------------------------------------------------
-# Pre‑build step: update version.h and main.cpp on every build
+# Extra version info passed directly to the compiler (no generated header needed)
+# ----------------------------------------------------------------------
+execute_process(
+    COMMAND git rev-parse HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE FW_FULL_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT FW_FULL_HASH)
+    set(FW_FULL_HASH "0000000000000000000000000000000000000000")
+endif()
+
+# Build ID – same format as the Python script (PYYYYMMDD-HHMMSS-ffffff)
+string(TIMESTAMP BUILD_TIMESTAMP "P%Y%m%d-%H%M%S-%f")
+string(SUBSTRING "${BUILD_TIMESTAMP}" 0 23 FW_BUILD_ID)
+
+target_compile_definitions(${PROJECT_NAME}.elf PRIVATE
+    FW_FULL_HASH="${FW_FULL_HASH}"
+    FW_BUILD_ID="${FW_BUILD_ID}"
+)
+
+message(STATUS "Full hash: ${FW_FULL_HASH}")
+message(STATUS "Build ID:  ${FW_BUILD_ID}")
+
+# ----------------------------------------------------------------------
+# Pre‑build step: update version.h and main.cpp Doxygen comment
 # ----------------------------------------------------------------------
 find_package(Python3 REQUIRED)
 
 add_custom_target(
     update_version_info ALL
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/update_version_comment.py
+        "--version" "${PROJECT_VER}"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Updating Git version in main.cpp and version.h"
     VERBATIM
 )
 
-# Ensure the update runs before the main firmware is linked
 add_dependencies(${CMAKE_PROJECT_NAME}.elf update_version_info)
 
 # ----------------------------------------------------------------------
