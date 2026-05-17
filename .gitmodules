@@ -19,3 +19,15 @@
 [submodule "components/toolbox"]
 	path = components/toolbox
 	url = https://github.com/edolis/ED-esp32-toolbox
+[submodule "components/ED_EEPROM"]
+	path = components/ED_EEPROM
+	url = https://github.com/edolis/ed_eeprom.git
+[submodule "components/ED_LOG_PERSIST"]
+	path = components/ED_LOG_PERSIST
+	url = https://github.com/edolis/ed_log_persist.git
+[submodule "components/ED_COM_ADS1115"]
+	path = components/ED_COM_ADS1115
+	url = https://github.com/edolis/ED_COM_ADS1115
+[submodule "components/ED_SNS_OPT3001"]
+	path = components/ED_SNS_OPT3001
+	url = https://github.com/edolis/ED_SNS_OPT3001

@@ -1,191 +1,86 @@
 /**
- * @file main_mqtt_core.cpp
- * @brief MQTT over TLS client for ESP32 using custom ED_* libraries.
- *        Connects to a Mosquitto broker with credentials from secrets.h.
+* @file main.cpp
+* @brief ADS1115 test using ED_ADS1115 library
  *
- * @author Emanuele Dolis (edoliscom@gmail.com)
- * @version GIT_VERSION: v0.0.0-0-dirty
- * @date 2025-08-29
+ * @author Emanuele Dolis (emanuele.dolis@gmail.com)
+ * @version GIT_VERSION: v1.1.3-2-g1ca6c6c-dirty
+ * @date 2026-05-15
+ * @submodules-start
+ *   ED_COM_ADS1115 : d81ca85
+ *   ED_EEPROM      : V1.0.0-0-g620932e-dirty
+ *   ED_MQTT        : v1.1.0-3-gfbadb25-dirty
+ *   ED_OTA         : v2.0.0-2-gcd9ff99-dirty
+ *   ED_S_JSON      : v1.0.0-0-gf58ffa6
+ *   ED_WIFI        : v1.0.0-0-g2f08383
+ * @submodules-end
  */
-
-#include <cstdio>
-
-#include "esp_crt_bundle.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "ed_board.h"
+#include "ED_i2c.h"
+#include "ED_ads1115.h"
 
-
-// Custom application libraries
-#include "ED_S_JSON.h" // Static JSON builder
-#include "ED_esp_err.h"
-#include "ED_heap_audit.h" // Heap snapshot utilities
-#include "ED_mqtt.h"
-#include "ED_sys.h"
-#include "ED_wifi.h"
-
-
-#include "secrets.h" // WiFi & MQTT credentials
-#include "version.h" // Build version information
-
-// -----------------------------------------------------------------------------
-//  Build Information (placeholders – replace with your actual versioning)
-// -----------------------------------------------------------------------------
-namespace ED_SYSINFO {
-struct GIT_fwInfo {
-  static constexpr const char *GIT_VERSION = "v0.0.0-0";
-  static constexpr const char *GIT_TAG = "untagged";
-  static constexpr const char *GIT_HASH = "gv0.0.0-0-g0000000-dirty";
-  static constexpr const char *FULL_HASH =
-      "0000000000000000000000000000000000000000";
-  static constexpr const char *BUILD_ID = "P20260502-115147-v0.0.0-";
-};
-} // namespace ED_SYSINFO
-
-using namespace ED_MQTT;
-// -----------------------------------------------------------------------------
-//  Constants
-// -----------------------------------------------------------------------------
-static const char *TAG = "ESP_main_loop";
-
-/** JSON buffer size for the ping payload (must be large enough for all fields)
- */
-#ifndef JSON_BUFFER_SIZE
-#define JSON_BUFFER_SIZE 1024
-#endif
-
-/** Ping interval in milliseconds */
-static constexpr int PING_INTERVAL_MS = 10000;
-
-// -----------------------------------------------------------------------------
-//  Utility Functions
-// -----------------------------------------------------------------------------
+static const char *TAG = "ads1115_16sps";
+static SemaphoreHandle_t sem = nullptr;
 
 /**
- * Convert seconds to a compact human‑readable string: "xxd00h00m"
- * @param seconds  total uptime in seconds
- * @return pointer to a static buffer (reused on each call)
+ *  note. tested with 100kOhm/1kOhm voltage divider from 3.3v rail on A0
+ *
  */
-static const char *formatUptime(int64_t seconds) {
-  static char buf[16]; // enough for "999d23h59m\0"
-  const uint16_t days = static_cast<uint16_t>(seconds / 86400);
-  const uint8_t hours = static_cast<uint8_t>((seconds % 86400) / 3600);
-  const uint8_t minutes = static_cast<uint8_t>((seconds % 3600) / 60);
-  snprintf(buf, sizeof(buf), "%dd%02dh%02dm", days, hours, minutes);
-  return buf;
-}
 
-/**
- * Build a JSON ping payload containing uptime, heap metrics and WiFi info.
- * Uses a static internal buffer – no dynamic allocation.
- * @return pointer to a null‑terminated JSON string (empty string on error)
- */
-static const char *buildPingPayload() {
-  const int64_t uptime_sec = esp_timer_get_time() / 1000000LL;
-  const auto wifiInfo = ED_wifi::WiFiService::getCurrentAPInfo();
 
-  // Take a heap snapshot (non‑allocating)
-  heap_audit_snapshot_t heap_snap;
-  heap_audit_take_snapshot(&heap_snap);
+void measurement_task(void *arg) {
+    ed::Ads1115 *ads = (ed::Ads1115*)arg;
+    float voltage_mV;
 
-  // Static JSON builder – reuses the same internal buffer
-  static ED_S_JSON::StaticJson json;
-  json.beginObject();
+    while (1) {
+        // Start a conversion on channel 0
+        if (ads->triggerConversion(0) != ESP_OK) {
+            ESP_LOGE(TAG, "triggerConversion failed");
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
 
-  // Uptime fields
-  json.addInt("dUPS", static_cast<uint64_t>(uptime_sec)); // seconds
-  json.addString("dUPT", formatUptime(uptime_sec));       // formatted
+        // Wait for the ALERT pin (timeout 200 ms – more than enough for 16 SPS)
+        if (xSemaphoreTake(sem, pdMS_TO_TICKS(200))) {
+            if (ads->getResult(voltage_mV) == ESP_OK) {
+                ESP_LOGI(TAG, "AIN0: %.3f mV (%.6f V)", voltage_mV, voltage_mV / 1000.0f);
+            } else {
+                ESP_LOGE(TAG, "getResult failed");
+            }
+        } else {
+            ESP_LOGW(TAG, "Conversion timeout");
+        }
 
-  // Heap metrics
-  json.addInt("hfree", heap_snap.total_free_bytes);     // total free DRAM
-  json.addInt("hlarge", heap_snap.largest_free_block);  // largest free block
-  json.addInt("hall", heap_snap.total_allocated_bytes); // allocated bytes
-  json.addInt("hblks", heap_snap.allocated_blocks);     // number of blocks
-  json.addInt("hfblk", heap_snap.free_blocks);          // free blocks
-  json.addInt("hfrag", static_cast<int>(heap_snap.fragmentation_percent));
-  json.addInt("hmin8", heap_snap.min_free_8bit); // historical min free (8‑bit)
-  json.addInt("hmin32",
-              heap_snap.min_free_32bit); // historical min free (32‑bit)
-  json.addBool("hintg", heap_snap.heap_integrity_ok); // true = heap OK
-
-  // WiFi info (if available)
-  if (wifiInfo.has_value()) {
-    json.addString("dNM", ED_SYS::ESP_std::Device::mqttName());
-    json.addString("dDGT", "DTF");
-    json.addInt("rssi_dbm", static_cast<int>(wifiInfo->rssi));
-    json.addString("rssi_ID", wifiInfo->ssid);
-  }
-
-  json.endObject();
-  return json.toString();
-}
-
-// -----------------------------------------------------------------------------
-//  Main Application Entry Point
-// -----------------------------------------------------------------------------
-extern "C" void app_main(void) {
-  // Start WiFi (credentials are taken from secrets.h)
-  ED_wifi::WiFiService::launch();
-
-  // MQTT client configuration (TLS, credentials, will message)
-  esp_mqtt_client_config_t mqtt_cfg = {
-      .broker =
-          {
-              .address =
-                  {
-                      .uri = "mqtts://raspi00:8883",
-                  },
-              .verification =
-                  {
-                      .use_global_ca_store = false,
-                      .crt_bundle_attach = esp_crt_bundle_attach,
-                      .skip_cert_common_name_check = false,
-                  },
-          },
-      .credentials =
-          {
-              .username = ED_MQTT_USERNAME,
-              .client_id = ED_SYS::ESP_std::Device::mqttName(),
-              .authentication =
-                  {
-                      .password = ED_MQTT_PASSWORD,
-                      .use_secure_element = false,
-                  },
-          },
-      .session =
-          {
-              .last_will =
-                  {
-                      .topic = "test",
-                      .msg = "last will message",
-                      .qos = 1,
-                      .retain = true,
-                  },
-              .protocol_ver = MQTT_PROTOCOL_V_5,
-          },
-  };
-
-  // When WiFi obtains an IP, create the MQTT client
-  ED_wifi::WiFiService::subscribeToIPReady([&mqtt_cfg]() {
-    ESP_LOGI(TAG, "IP ready – creating MQTT client");
-    const esp_err_t err = SAMPLE_derivedMqttClient::create(mqtt_cfg);
-    ESP_LOGI(TAG, "MQTT create returned: %s", esp_err_to_name(err));
-  });
-
-  // Main loop: send a ping every PING_INTERVAL_MS milliseconds
-  while (true) {
-    auto *mqtt = SAMPLE_derivedMqttClient::getInstance();
-    if (mqtt && mqtt->getHandle() != nullptr) {
-      const char *payload = buildPingPayload();
-      if (payload && payload[0] != '\0') {
-        mqtt->send_ping_message(payload);
-      } else {
-        ESP_LOGW(TAG, "Empty payload, skipping ping");
-      }
-    } else {
-      ESP_LOGI(TAG, "MQTT client not ready, waiting...");
+        // Wait half a second before the next reading
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
-    vTaskDelay(pdMS_TO_TICKS(PING_INTERVAL_MS));
-  }
+}
+
+extern "C" void app_main() {
+    ESP_LOGI(TAG, "Data rate = 16 SPS, reading every 500 ms");
+
+    I2CBus i2cBus(I2C_NUM_0, ED_I2C_SDA, ED_I2C_SCL, 400000);
+    ed::Ads1115 ads(i2cBus, 0x48);
+
+    // Initialise with GAIN_ONE, but data rate = 16 SPS
+    ESP_ERROR_CHECK(ads.init(ed::AdsGain::GAIN_ONE,
+                             ed::AdsDataRate::SPS_16,    // 16 samples per second
+                             ed::AdsMode::MODE_SINGLE_SHOT));
+    // Override channel 0 gain to maximum for precision
+    ads.setChannelGain(0, ed::AdsGain::GAIN_SIXTEEN);
+
+    // Enable data-ready interrupt on GPIO6 (active low)
+    ESP_ERROR_CHECK(ads.enableDataReadyPin(GPIO_NUM_6, true));
+    sem = ads.getDataReadySemaphore();
+
+    // Create task
+    xTaskCreate(measurement_task, "meas", 4096, &ads, 5, NULL);
+
+    // Main loop idle
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 }

@@ -11,7 +11,7 @@ endif()
 
 idf_component_register(SRCS "main.cpp" "$ENV{ESP_HEADERS}/x509_crt_bundle.S"
     INCLUDE_DIRS "." ${CMAKE_CURRENT_BINARY_DIR}
-    REQUIRES ED_WIFI ED_MQTT diag ED_S_JSON ED_OTA
+    REQUIRES ED_WIFI ED_MQTT diag ED_S_JSON ED_OTA ED_EEPROM ED_COM_ADS1115
 )
 
 target_compile_definitions(${COMPONENT_TARGET} PRIVATE ENABLE_OTA=${ENABLE_OTA})

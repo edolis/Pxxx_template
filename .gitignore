@@ -8,6 +8,9 @@ dependencies.lock
 # Generated version header (from configure_file) – but keep version.h.in
 */version.h
 
+# temporary storage
+temp/
+
 # Object files, binaries, maps
 *.o
 *.a
