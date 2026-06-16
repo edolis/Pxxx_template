@@ -31,3 +31,12 @@
 [submodule "components/ED_SNS_OPT3001"]
 	path = components/ED_SNS_OPT3001
 	url = https://github.com/edolis/ED_SNS_OPT3001
+[submodule "components/ED_COM_MCP4725"]
+	path = components/ED_COM_MCP4725
+	url = https://github.com/edolis/ED_COM_MCP4725
+[submodule "components/ED_SNS_AS7343"]
+	path = components/ED_SNS_AS7343
+	url = https://github.com/edolis/ED_SNS_AS7343
+[submodule "components/ED_SNS_MT6701"]
+	path = components/ED_SNS_MT6701
+	url = https://github.com/edolis/ED_SNS_MT6701
