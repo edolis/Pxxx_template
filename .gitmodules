@@ -40,3 +40,9 @@
 [submodule "components/ED_SNS_MT6701"]
 	path = components/ED_SNS_MT6701
 	url = https://github.com/edolis/ED_SNS_MT6701
+[submodule "components/ED_SNS_LD2450"]
+	path = components/ED_SNS_LD2450
+	url = https://github.com/edolis/ED_SNS_LD2450
+[submodule "components/ED_SNS_RCWL1670"]
+	path = components/ED_SNS_RCWL1670
+	url = https://github.com/edolis/ED_SNS_RCWL1670
