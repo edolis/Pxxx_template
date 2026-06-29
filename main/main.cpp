@@ -1,86 +1,166 @@
 /**
 * @file main.cpp
-* @brief ADS1115 test using ED_ADS1115 library
+* @brief RCWL1670 ultrasonic sensor library test
  *
  * @author Emanuele Dolis (emanuele.dolis@gmail.com)
- * @version GIT_VERSION: v1.1.3-2-g1ca6c6c-dirty
- * @date 2026-05-15
+ * @version GIT_VERSION: v1.1.3-5-g511346d-dirty
+ * @date 2026-06-24
  * @submodules-start
- *   ED_COM_ADS1115 : d81ca85
- *   ED_EEPROM      : V1.0.0-0-g620932e-dirty
- *   ED_MQTT        : v1.1.0-3-gfbadb25-dirty
- *   ED_OTA         : v2.0.0-2-gcd9ff99-dirty
- *   ED_S_JSON      : v1.0.0-0-gf58ffa6
- *   ED_WIFI        : v1.0.0-0-g2f08383
+ *   ED_WIFI : v1.1.0-1-g3b68ca4
  * @submodules-end
  */
-#include "esp_log.h"
+
+// -----------------------------------------------------------------------------
+// 1. Target and board definitions
+// -----------------------------------------------------------------------------
+#define CONFIG_IDF_TARGET_ESP32C6
+#include "ed_board.h"
+
+// -----------------------------------------------------------------------------
+// 2. ESP-IDF headers
+// -----------------------------------------------------------------------------
+#include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
-#include "ed_board.h"
-#include "ED_i2c.h"
-#include "ED_ads1115.h"
+#include "esp_log.h"
 
-static const char *TAG = "ads1115_16sps";
-static SemaphoreHandle_t sem = nullptr;
+// -----------------------------------------------------------------------------
+// 3. RCWL1670 driver
+// -----------------------------------------------------------------------------
+#include "ED_SNS_RCWL1670.h"
 
-/**
- *  note. tested with 100kOhm/1kOhm voltage divider from 3.3v rail on A0
- *
- */
+// -----------------------------------------------------------------------------
+// 4. Application constants
+// -----------------------------------------------------------------------------
+static const char *TAG = "MAIN";
 
+// Tank geometry – distance from sensor to bottom (cm)
+#define TANK_HEIGHT  200.0f
 
-void measurement_task(void *arg) {
-    ed::Ads1115 *ads = (ed::Ads1115*)arg;
-    float voltage_mV;
+// Sensor pins (direct 3.3V connection – no voltage divider)
+#define TRIG_PIN     GPIO_NUM_6
+#define ECHO_PIN     GPIO_NUM_7
+
+// Sensor parameters (tunable)
+#define MIN_DIST     5       // minimum measurable distance (cm)
+#define MAX_DIST     400     // maximum measurable distance (cm)
+#define MAX_RETRY    2       // retries on failed reading
+#define FINE_TUNE    200     // echo timeout adjustment (50‑300)
+#define DEBUG_EN     false    // enable debug logging initially
+
+// -----------------------------------------------------------------------------
+// 5. Main application
+// -----------------------------------------------------------------------------
+extern "C" void app_main(void)
+{
+    ESP_LOGI(TAG, "=== RCWL1670 Full Feature Test ===");
+
+    // -------------------------------------------------------------
+    // 5.1 Create sensor instance with all parameters
+    // -------------------------------------------------------------
+    ed_sns::RCWL1670 sensor(TRIG_PIN, ECHO_PIN,
+                            MIN_DIST, MAX_DIST,
+                            MAX_RETRY, FINE_TUNE,
+                            DEBUG_EN);
+
+    // -------------------------------------------------------------
+    // 5.2 Initialise GPIOs
+    // -------------------------------------------------------------
+    esp_err_t ret = sensor.init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Sensor init failed (err=0x%x)", ret);
+        return;
+    }
+    ESP_LOGI(TAG, "Sensor initialised successfully");
+
+    // -------------------------------------------------------------
+    // 5.3 Display current configuration
+    // -------------------------------------------------------------
+    auto cfg = sensor.get_config();
+    ESP_LOGI(TAG, "Configuration:");
+    ESP_LOGI(TAG, "  TRIG pin : %d", cfg.trig_pin);
+    ESP_LOGI(TAG, "  ECHO pin : %d", cfg.echo_pin);
+    ESP_LOGI(TAG, "  Min dist : %u cm", cfg.min_dist);
+    ESP_LOGI(TAG, "  Max dist : %u cm", cfg.max_dist);
+    ESP_LOGI(TAG, "  Max retry: %u", cfg.max_retry);
+    ESP_LOGI(TAG, "  Fine tune: %u", cfg.fine_tune);
+    ESP_LOGI(TAG, "  Debug    : %s", cfg.debug ? "ON" : "OFF");
+
+    // -------------------------------------------------------------
+    // 5.4 Reset Kalman filter (clean start)
+    // -------------------------------------------------------------
+    sensor.reset_filter();
+    ESP_LOGI(TAG, "Kalman filter reset");
+
+    // -------------------------------------------------------------
+    // 5.5 Main measurement loop – demonstrates all features
+    // -------------------------------------------------------------
+    uint16_t raw_dist = 0;
+    float    filtered_dist = 0.0f;
+    float    water_level = 0.0f;
+    int      percentage = 0;
+    int      cycle = 0;
 
     while (1) {
-        // Start a conversion on channel 0
-        if (ads->triggerConversion(0) != ESP_OK) {
-            ESP_LOGE(TAG, "triggerConversion failed");
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
+        cycle++;
+        ESP_LOGI(TAG, "--- Cycle %d ---", cycle);
+
+        // ---------------------------------------------------------
+        // a) Raw measurement (without filter)
+        // ---------------------------------------------------------
+        ret = sensor.measure(raw_dist);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Raw distance : %3u cm", raw_dist);
+        } else {
+            ESP_LOGW(TAG, "Raw measurement failed");
         }
 
-        // Wait for the ALERT pin (timeout 200 ms – more than enough for 16 SPS)
-        if (xSemaphoreTake(sem, pdMS_TO_TICKS(200))) {
-            if (ads->getResult(voltage_mV) == ESP_OK) {
-                ESP_LOGI(TAG, "AIN0: %.3f mV (%.6f V)", voltage_mV, voltage_mV / 1000.0f);
-            } else {
-                ESP_LOGE(TAG, "getResult failed");
+        // ---------------------------------------------------------
+        // b) Filtered measurement (with Kalman)
+        // ---------------------------------------------------------
+        ret = sensor.measure_filtered(filtered_dist);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Filtered dist: %5.1f cm", filtered_dist);
+
+            // Calculate water level and percentage
+            water_level = TANK_HEIGHT - filtered_dist;
+            if (water_level < 0.0f)   water_level = 0.0f;
+            if (water_level > TANK_HEIGHT) water_level = TANK_HEIGHT;
+            percentage = (int)((water_level / TANK_HEIGHT) * 100.0f);
+
+            ESP_LOGI(TAG, "Water level : %5.1f cm from bottom", water_level);
+            ESP_LOGI(TAG, "Fill        : %3d %%", percentage);
+
+            // Alerts
+            if (percentage <= 20) {
+                ESP_LOGW(TAG, "⚠️  LOW WATER LEVEL (<= 20%%)");
+            } else if (percentage >= 95) {
+                ESP_LOGW(TAG, "⚠️  TANK NEARLY FULL (>= 95%%)");
             }
         } else {
-            ESP_LOGW(TAG, "Conversion timeout");
+            ESP_LOGW(TAG, "Filtered measurement failed");
         }
 
-        // Wait half a second before the next reading
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-}
+        // ---------------------------------------------------------
+        // c) Demonstrate debug toggle (toggle every 10 cycles)
+        // ---------------------------------------------------------
+        if (cycle % 10 == 0) {
+            bool new_debug = !sensor.get_config().debug;
+            sensor.set_debug(new_debug);
+            ESP_LOGI(TAG, "Debug toggled to %s", new_debug ? "ON" : "OFF");
+        }
 
-extern "C" void app_main() {
-    ESP_LOGI(TAG, "Data rate = 16 SPS, reading every 500 ms");
+        // ---------------------------------------------------------
+        // d) Demonstrate reset_filter (reset every 30 cycles)
+        // ---------------------------------------------------------
+        if (cycle % 30 == 0) {
+            sensor.reset_filter();
+            ESP_LOGI(TAG, "Kalman filter reset (periodic)");
+        }
 
-    I2CBus i2cBus(I2C_NUM_0, ED_I2C_SDA, ED_I2C_SCL, 400000);
-    ed::Ads1115 ads(i2cBus, 0x48);
-
-    // Initialise with GAIN_ONE, but data rate = 16 SPS
-    ESP_ERROR_CHECK(ads.init(ed::AdsGain::GAIN_ONE,
-                             ed::AdsDataRate::SPS_16,    // 16 samples per second
-                             ed::AdsMode::MODE_SINGLE_SHOT));
-    // Override channel 0 gain to maximum for precision
-    ads.setChannelGain(0, ed::AdsGain::GAIN_SIXTEEN);
-
-    // Enable data-ready interrupt on GPIO6 (active low)
-    ESP_ERROR_CHECK(ads.enableDataReadyPin(GPIO_NUM_6, true));
-    sem = ads.getDataReadySemaphore();
-
-    // Create task
-    xTaskCreate(measurement_task, "meas", 4096, &ads, 5, NULL);
-
-    // Main loop idle
-    while (1) {
+        // ---------------------------------------------------------
+        // e) Wait before next reading
+        // ---------------------------------------------------------
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }

@@ -1,50 +1,50 @@
 {
-    "debug": {
-        "build": {
-            "compileArgs": [],
-            "ninjaArgs": [],
-            "buildDirectoryPath": "",
-            "sdkconfigDefaults": [],
-            "sdkconfigFilePath": ""
-        },
-        "env": {},
-        "idfTarget": "esp32s3",
-        "flashBaudRate": "",
-        "monitorBaudRate": "",
-        "openOCD": {
-            "debugLevel": -1,
-            "configs": [],
-            "args": []
-        },
-        "tasks": {
-            "preBuild": "python ${workspaceFolder}/tools/merge_fragments.py",
-            "preFlash": "",
-            "postBuild": "",
-            "postFlash": ""
-        }
+  "debug": {
+    "build": {
+      "compileArgs": [],
+      "ninjaArgs": [],
+      "buildDirectoryPath": "",
+      "sdkconfigDefaults": [],
+      "sdkconfigFilePath": ""
     },
-    "production": {
-        "build": {
-            "compileArgs": [],
-            "ninjaArgs": [],
-            "buildDirectoryPath": "",
-            "sdkconfigDefaults": [],
-            "sdkconfigFilePath": ""
-        },
-        "env": {},
-        "idfTarget": "esp32s3",
-        "flashBaudRate": "",
-        "monitorBaudRate": "",
-        "openOCD": {
-            "debugLevel": -1,
-            "configs": [],
-            "args": []
-        },
-        "tasks": {
-            "preBuild": "python ${workspaceFolder}/tools/merge_fragments.py",
-            "preFlash": "",
-            "postBuild": "",
-            "postFlash": ""
-        }
+    "env": {},
+    "idfTarget": "esp32c6",
+    "flashBaudRate": "",
+    "monitorBaudRate": "",
+    "openOCD": {
+      "debugLevel": -1,
+      "configs": [],
+      "args": []
+    },
+    "tasks": {
+      "preBuild": "python ${workspaceFolder}/tools/merge_fragments.py",
+      "preFlash": "",
+      "postBuild": "",
+      "postFlash": ""
     }
+  },
+  "production": {
+    "build": {
+      "compileArgs": [],
+      "ninjaArgs": [],
+      "buildDirectoryPath": "",
+      "sdkconfigDefaults": [],
+      "sdkconfigFilePath": ""
+    },
+    "env": {},
+    "idfTarget": "esp32s3",
+    "flashBaudRate": "",
+    "monitorBaudRate": "",
+    "openOCD": {
+      "debugLevel": -1,
+      "configs": [],
+      "args": []
+    },
+    "tasks": {
+      "preBuild": "python ${workspaceFolder}/tools/merge_fragments.py",
+      "preFlash": "",
+      "postBuild": "",
+      "postFlash": ""
+    }
+  }
 }
